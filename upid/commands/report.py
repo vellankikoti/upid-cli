@@ -1,329 +1,471 @@
 """
 Reporting commands for UPID CLI
 """
+
 import click
-import sys
-from upid.core.utils import (
-    print_success, print_error, print_info, print_warning,
-    validate_cluster_id, format_currency, format_percentage,
-    save_json_file, save_yaml_file
-)
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich import box
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.layout import Layout
+from rich.text import Text
+from ..core.config import Config
+from ..core.api_client import UPIDAPIClient
+from ..core.auth import AuthManager
+
+console = Console()
 
 @click.group()
-def report_group():
-    """Reporting and business intelligence commands"""
+def report():
+    """Reporting commands"""
     pass
 
-@report_group.command()
+@report.command()
 @click.argument('cluster_id')
-@click.option('--report-type', '-t', default='cost_optimization', 
-              type=click.Choice(['cost_optimization', 'performance', 'security', 'comprehensive']),
-              help='Report type')
-@click.option('--period', '-p', default='30d', help='Report period')
+@click.option('--period', '-p', default='30d', type=click.Choice(['7d', '30d', '90d']), help='Report period')
+@click.option('--format', '-f', default='table', type=click.Choice(['table', 'json', 'yaml', 'html']), help='Output format')
 @click.option('--output', '-o', help='Output file path')
-@click.option('--format', '-f', type=click.Choice(['json', 'yaml', 'pdf']), default='json', help='Output format')
-@click.pass_context
-def generate(ctx, cluster_id, report_type, period, output, format):
-    """Generate business report"""
-    api_client = ctx.obj['auth'].api_client
-    
-    if not validate_cluster_id(cluster_id):
-        print_error("Invalid cluster ID format")
-        sys.exit(1)
-    
+def summary(cluster_id, period, format, output):
+    """Generate comprehensive cluster summary report"""
     try:
-        with show_progress("📊 Generating business report..."):
-            report = api_client.get_business_report(cluster_id, report_type)
+        config = Config()
+        auth_manager = AuthManager(config)
         
-        click.echo(f"📊 Business Report: {cluster_id}")
-        click.echo(f"📅 Period: {period}")
-        click.echo(f"📋 Type: {report_type}")
-        click.echo("=" * 60)
+        if not auth_manager.is_authenticated():
+            console.print("[red]✗ Not authenticated. Please login first.[/red]")
+            raise click.Abort()
         
-        # Executive Summary
-        if 'executive_summary' in report:
-            summary = report['executive_summary']
-            click.echo("🎯 Executive Summary:")
-            click.echo(f"  💰 Total Cost: {format_currency(summary['total_cost'])}")
-            click.echo(f"  💸 Potential Savings: {format_currency(summary['potential_savings'])}")
-            click.echo(f"  📈 Efficiency Score: {format_percentage(summary['efficiency_score'])}")
-            click.echo(f"  🛡️  Security Score: {format_percentage(summary['security_score'])}")
-            click.echo()
+        api_client = UPIDAPIClient(config, auth_manager)
         
-        # Key Findings
-        if 'key_findings' in report:
-            findings = report['key_findings']
-            click.echo("🔍 Key Findings:")
-            for finding in findings:
-                click.echo(f"  • {finding['description']}")
-                if 'impact' in finding:
-                    click.echo(f"    Impact: {finding['impact']}")
-                if 'recommendation' in finding:
-                    click.echo(f"    Recommendation: {finding['recommendation']}")
-                click.echo()
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console
+        ) as progress:
+            task = progress.add_task(f"Generating summary report for cluster {cluster_id}...", total=None)
+            report_data = api_client.generate_summary_report(cluster_id, period)
+            progress.update(task, completed=True)
         
-        # Cost Analysis
-        if 'cost_analysis' in report:
-            cost = report['cost_analysis']
-            click.echo("💰 Cost Analysis:")
-            click.echo(f"  Current Monthly Cost: {format_currency(cost['current_monthly_cost'])}")
-            click.echo(f"  Optimized Monthly Cost: {format_currency(cost['optimized_monthly_cost'])}")
-            click.echo(f"  Monthly Savings: {format_currency(cost['monthly_savings'])}")
-            click.echo(f"  Annual Savings: {format_currency(cost['annual_savings'])}")
-            click.echo(f"  ROI: {format_percentage(cost['roi'])}")
-            click.echo()
-        
-        # Zero-Pod Scaling Analysis
-        if 'zero_pod_analysis' in report:
-            zero_pod = report['zero_pod_analysis']
-            click.echo("🔄 Zero-Pod Scaling Analysis:")
-            click.echo(f"  Scalable Pods: {zero_pod['scalable_pods_count']}")
-            click.echo(f"  Potential Savings: {format_currency(zero_pod['potential_savings'])}")
-            click.echo(f"  Idle Time Percentage: {format_percentage(zero_pod['idle_time_percentage'])}")
-            click.echo()
-        
-        # Recommendations
-        if 'recommendations' in report:
-            recommendations = report['recommendations']
-            click.echo("🎯 Recommendations:")
-            for i, rec in enumerate(recommendations, 1):
-                click.echo(f"  {i}. {rec['title']}")
-                click.echo(f"     Description: {rec['description']}")
-                click.echo(f"     Impact: {rec['impact']}")
-                click.echo(f"     Savings: {format_currency(rec['savings'])}")
-                click.echo(f"     Priority: {rec['priority']}")
-                click.echo()
-        
-        # Save to file if requested
-        if output:
-            if format == 'json':
-                save_json_file(report, output)
-            elif format == 'yaml':
-                save_yaml_file(report, output)
-            print_success(f"Report saved to {output}")
-        
-    except Exception as e:
-        print_error(f"Failed to generate report: {e}")
-        sys.exit(1)
-
-@report_group.command()
-@click.argument('cluster_id')
-@click.option('--period', '-p', default='30d', help='Analysis period')
-@click.pass_context
-def roi(ctx, cluster_id, period):
-    """Calculate ROI for cluster optimizations"""
-    api_client = ctx.obj['auth'].api_client
-    
-    if not validate_cluster_id(cluster_id):
-        print_error("Invalid cluster ID format")
-        sys.exit(1)
-    
-    try:
-        # Get investment data
-        investment_data = {
-            'cluster_id': cluster_id,
-            'period': period,
-            'optimization_type': 'comprehensive'
-        }
-        
-        with show_progress("💰 Calculating ROI..."):
-            roi_analysis = api_client.calculate_roi(investment_data)
-        
-        click.echo(f"💰 ROI Analysis: {cluster_id}")
-        click.echo(f"📅 Period: {period}")
-        click.echo("=" * 50)
-        click.echo(f"💵 Total Investment: {format_currency(roi_analysis['total_investment'])}")
-        click.echo(f"💰 Total Savings: {format_currency(roi_analysis['total_savings'])}")
-        click.echo(f"📈 ROI: {format_percentage(roi_analysis['roi'])}")
-        click.echo(f"⏰ Payback Period: {roi_analysis['payback_period']} months")
-        click.echo(f"📊 Net Present Value: {format_currency(roi_analysis['npv'])}")
-        
-        if 'breakdown' in roi_analysis:
-            breakdown = roi_analysis['breakdown']
-            click.echo(f"\n📊 ROI Breakdown:")
-            for category, data in breakdown.items():
-                click.echo(f"  {category}:")
-                click.echo(f"    Investment: {format_currency(data['investment'])}")
-                click.echo(f"    Savings: {format_currency(data['savings'])}")
-                click.echo(f"    ROI: {format_percentage(data['roi'])}")
-        
-    except Exception as e:
-        print_error(f"ROI calculation failed: {e}")
-        sys.exit(1)
-
-@report_group.command()
-@click.argument('cluster_id')
-@click.pass_context
-def kpis(ctx, cluster_id):
-    """Get performance KPIs for cluster"""
-    api_client = ctx.obj['auth'].api_client
-    
-    if not validate_cluster_id(cluster_id):
-        print_error("Invalid cluster ID format")
-        sys.exit(1)
-    
-    try:
-        with show_progress("📊 Fetching KPIs..."):
-            kpis = api_client.get_performance_kpis(cluster_id)
-        
-        click.echo(f"📊 Performance KPIs: {cluster_id}")
-        click.echo("=" * 50)
-        
-        # Cost KPIs
-        if 'cost_kpis' in kpis:
-            cost = kpis['cost_kpis']
-            click.echo("💰 Cost KPIs:")
-            click.echo(f"  Monthly Cost: {format_currency(cost['monthly_cost'])}")
-            click.echo(f"  Cost per Pod: {format_currency(cost['cost_per_pod'])}")
-            click.echo(f"  Cost Efficiency: {format_percentage(cost['cost_efficiency'])}")
-            click.echo(f"  Cost Trend: {cost['cost_trend']}")
-            click.echo()
-        
-        # Performance KPIs
-        if 'performance_kpis' in kpis:
-            perf = kpis['performance_kpis']
-            click.echo("⚡ Performance KPIs:")
-            click.echo(f"  CPU Utilization: {format_percentage(perf['cpu_utilization'])}")
-            click.echo(f"  Memory Utilization: {format_percentage(perf['memory_utilization'])}")
-            click.echo(f"  Response Time: {perf['avg_response_time']}ms")
-            click.echo(f"  Throughput: {perf['throughput']} req/s")
-            click.echo()
-        
-        # Efficiency KPIs
-        if 'efficiency_kpis' in kpis:
-            eff = kpis['efficiency_kpis']
-            click.echo("📈 Efficiency KPIs:")
-            click.echo(f"  Resource Efficiency: {format_percentage(eff['resource_efficiency'])}")
-            click.echo(f"  Pod Density: {eff['pod_density']} pods/node")
-            click.echo(f"  Idle Time: {format_percentage(eff['idle_time_percentage'])}")
-            click.echo(f"  Zero-Pod Scaling: {eff['zero_pod_scaling_pods']} pods")
-            click.echo()
-        
-        # Security KPIs
-        if 'security_kpis' in kpis:
-            sec = kpis['security_kpis']
-            click.echo("🛡️  Security KPIs:")
-            click.echo(f"  Security Score: {format_percentage(sec['security_score'])}")
-            click.echo(f"  Vulnerabilities: {sec['vulnerability_count']}")
-            click.echo(f"  Compliance Score: {format_percentage(sec['compliance_score'])}")
-            click.echo(f"  Security Incidents: {sec['security_incidents']}")
-            click.echo()
-        
-    except Exception as e:
-        print_error(f"Failed to get KPIs: {e}")
-        sys.exit(1)
-
-@report_group.command()
-@click.argument('cluster_id')
-@click.option('--period', '-p', default='30d', help='Analysis period')
-@click.option('--output', '-o', help='Output file path')
-@click.pass_context
-def export(ctx, cluster_id, period, output):
-    """Export comprehensive cluster report"""
-    api_client = ctx.obj['auth'].api_client
-    
-    if not validate_cluster_id(cluster_id):
-        print_error("Invalid cluster ID format")
-        sys.exit(1)
-    
-    try:
-        with show_progress("📊 Generating comprehensive report..."):
-            # Get multiple reports
-            cost_report = api_client.get_business_report(cluster_id, 'cost_optimization')
-            perf_report = api_client.get_business_report(cluster_id, 'performance')
-            security_report = api_client.get_business_report(cluster_id, 'security')
+        if format == 'table':
+            # Create comprehensive report
+            console.print(f"\n[bold blue]Cluster Summary Report[/bold blue]")
+            console.print(f"Cluster: {report_data.get('cluster_name', cluster_id)}")
+            console.print(f"Period: {period}")
+            console.print(f"Generated: {report_data.get('generated_at', 'N/A')}")
+            console.print()
             
-            # Combine into comprehensive report
-            comprehensive_report = {
-                'cluster_id': cluster_id,
-                'period': period,
-                'generated_at': datetime.now().isoformat(),
-                'cost_analysis': cost_report,
-                'performance_analysis': perf_report,
-                'security_analysis': security_report,
-                'summary': {
-                    'total_cost': cost_report.get('executive_summary', {}).get('total_cost', 0),
-                    'potential_savings': cost_report.get('executive_summary', {}).get('potential_savings', 0),
-                    'efficiency_score': cost_report.get('executive_summary', {}).get('efficiency_score', 0),
-                    'security_score': security_report.get('executive_summary', {}).get('security_score', 0)
-                }
-            }
-        
-        click.echo(f"📊 Comprehensive Report: {cluster_id}")
-        click.echo(f"📅 Period: {period}")
-        click.echo("=" * 60)
-        
-        # Display summary
-        summary = comprehensive_report['summary']
-        click.echo("📋 Executive Summary:")
-        click.echo(f"  💰 Total Cost: {format_currency(summary['total_cost'])}")
-        click.echo(f"  💸 Potential Savings: {format_currency(summary['potential_savings'])}")
-        click.echo(f"  📈 Efficiency Score: {format_percentage(summary['efficiency_score'])}")
-        click.echo(f"  🛡️  Security Score: {format_percentage(summary['security_score'])}")
-        
-        # Save to file if requested
-        if output:
-            save_json_file(comprehensive_report, output)
-            print_success(f"Comprehensive report saved to {output}")
-        else:
-            print_info("Use --output to save report to file")
+            # Resource Summary
+            resource_table = Table(title="Resource Summary", box=box.ROUNDED)
+            resource_table.add_column("Resource", style="cyan", no_wrap=True)
+            resource_table.add_column("Used", style="yellow")
+            resource_table.add_column("Total", style="green")
+            resource_table.add_column("Utilization", style="blue")
+            resource_table.add_column("Trend", style="white")
+            
+            resources = report_data.get('resources', {})
+            for resource_type, data in resources.items():
+                used = data.get('used', 0)
+                total = data.get('total', 0)
+                util = (used / total * 100) if total > 0 else 0
+                trend = data.get('trend', 'N/A')
+                
+                resource_table.add_row(
+                    resource_type.title(),
+                    f"{used:.1f}",
+                    f"{total:.1f}",
+                    f"{util:.1f}%",
+                    trend
+                )
+            
+            console.print(resource_table)
+            console.print()
+            
+            # Cost Summary
+            cost_table = Table(title="Cost Summary", box=box.ROUNDED)
+            cost_table.add_column("Category", style="cyan", no_wrap=True)
+            cost_table.add_column("Current", style="yellow")
+            cost_table.add_column("Previous", style="blue")
+            cost_table.add_column("Change", style="green")
+            cost_table.add_column("Trend", style="white")
+            
+            costs = report_data.get('costs', {})
+            for category, data in costs.items():
+                current = data.get('current', 0)
+                previous = data.get('previous', 0)
+                change = current - previous
+                change_pct = (change / previous * 100) if previous > 0 else 0
+                trend = data.get('trend', 'N/A')
+                
+                change_color = "green" if change <= 0 else "red"
+                cost_table.add_row(
+                    category.title(),
+                    f"${current:.2f}",
+                    f"${previous:.2f}",
+                    f"[{change_color}]{change:+.2f} ({change_pct:+.1f}%)[/{change_color}]",
+                    trend
+                )
+            
+            console.print(cost_table)
+            console.print()
+            
+            # Performance Summary
+            perf_table = Table(title="Performance Summary", box=box.ROUNDED)
+            perf_table.add_column("Metric", style="cyan", no_wrap=True)
+            perf_table.add_column("Current", style="yellow")
+            perf_table.add_column("Average", style="blue")
+            perf_table.add_column("Peak", style="red")
+            perf_table.add_column("Status", style="white")
+            
+            performance = report_data.get('performance', {})
+            for metric, data in performance.items():
+                current = data.get('current', 0)
+                avg = data.get('average', 0)
+                peak = data.get('peak', 0)
+                status = data.get('status', 'N/A')
+                
+                perf_table.add_row(
+                    metric.title(),
+                    f"{current:.1f}",
+                    f"{avg:.1f}",
+                    f"{peak:.1f}",
+                    status
+                )
+            
+            console.print(perf_table)
+            console.print()
+            
+            # Recommendations
+            recommendations = report_data.get('recommendations', [])
+            if recommendations:
+                console.print("[bold]Recommendations:[/bold]")
+                for i, rec in enumerate(recommendations, 1):
+                    console.print(f"{i}. [yellow]{rec.get('title', 'N/A')}[/yellow]")
+                    console.print(f"   {rec.get('description', 'N/A')}")
+                    console.print(f"   Impact: [green]{rec.get('impact', 'N/A')}[/green]")
+                    console.print(f"   Priority: [red]{rec.get('priority', 'N/A')}[/red]")
+                    console.print()
+            
+        elif format == 'json':
+            import json
+            output_data = json.dumps(report_data, indent=2)
+            if output:
+                with open(output, 'w') as f:
+                    f.write(output_data)
+                console.print(f"[green]Report saved to {output}[/green]")
+            else:
+                console.print(output_data)
+            
+        elif format == 'yaml':
+            import yaml
+            output_data = yaml.dump(report_data, default_flow_style=False)
+            if output:
+                with open(output, 'w') as f:
+                    f.write(output_data)
+                console.print(f"[green]Report saved to {output}[/green]")
+            else:
+                console.print(output_data)
+            
+        elif format == 'html':
+            # Generate HTML report
+            html_content = generate_html_report(report_data, cluster_id, period)
+            if output:
+                with open(output, 'w') as f:
+                    f.write(html_content)
+                console.print(f"[green]HTML report saved to {output}[/green]")
+            else:
+                console.print("[yellow]HTML output requires --output parameter[/yellow]")
         
     except Exception as e:
-        print_error(f"Failed to export report: {e}")
-        sys.exit(1)
+        console.print(f"[red]✗ Failed to generate summary report: {str(e)}[/red]")
+        raise click.Abort()
 
-@report_group.command()
+@report.command()
 @click.argument('cluster_id')
-@click.option('--period', '-p', default='30d', help='Analysis period')
-@click.pass_context
-def trends(ctx, cluster_id, period):
-    """Analyze trends over time"""
-    api_client = ctx.obj['auth'].api_client
-    
-    if not validate_cluster_id(cluster_id):
-        print_error("Invalid cluster ID format")
-        sys.exit(1)
-    
+@click.option('--period', '-p', default='30d', type=click.Choice(['7d', '30d', '90d']), help='Report period')
+@click.option('--format', '-f', default='table', type=click.Choice(['table', 'json', 'yaml']), help='Output format')
+@click.option('--output', '-o', help='Output file path')
+def cost(cluster_id, period, format, output):
+    """Generate detailed cost report"""
     try:
-        with show_progress("📈 Analyzing trends..."):
-            trends_data = api_client.get_trend_analysis(cluster_id, period)
+        config = Config()
+        auth_manager = AuthManager(config)
         
-        click.echo(f"📈 Trend Analysis: {cluster_id}")
-        click.echo(f"📅 Period: {period}")
-        click.echo("=" * 50)
+        if not auth_manager.is_authenticated():
+            console.print("[red]✗ Not authenticated. Please login first.[/red]")
+            raise click.Abort()
         
-        # Cost trends
-        if 'cost_trends' in trends_data:
-            cost_trends = trends_data['cost_trends']
-            click.echo("💰 Cost Trends:")
-            for trend in cost_trends:
-                change_icon = "📈" if trend['change'] > 0 else "📉"
-                click.echo(f"  {change_icon} {trend['period']}: {format_currency(trend['cost'])} ({trend['change']}%)")
-            click.echo()
+        api_client = UPIDAPIClient(config, auth_manager)
         
-        # Performance trends
-        if 'performance_trends' in trends_data:
-            perf_trends = trends_data['performance_trends']
-            click.echo("⚡ Performance Trends:")
-            for trend in perf_trends:
-                click.echo(f"  📊 {trend['metric']}: {trend['value']} ({trend['change']}%)")
-            click.echo()
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console
+        ) as progress:
+            task = progress.add_task(f"Generating cost report for cluster {cluster_id}...", total=None)
+            report_data = api_client.generate_cost_report(cluster_id, period)
+            progress.update(task, completed=True)
         
-        # Efficiency trends
-        if 'efficiency_trends' in trends_data:
-            eff_trends = trends_data['efficiency_trends']
-            click.echo("📈 Efficiency Trends:")
-            for trend in eff_trends:
-                click.echo(f"  📊 {trend['metric']}: {format_percentage(trend['value'])} ({trend['change']}%)")
-            click.echo()
-        
-        # Predictions
-        if 'predictions' in trends_data:
-            predictions = trends_data['predictions']
-            click.echo("🔮 Predictions (Next 3 months):")
-            for pred in predictions:
-                click.echo(f"  📊 {pred['metric']}: {pred['predicted_value']} ({pred['confidence']}% confidence)")
+        if format == 'table':
+            # Create detailed cost report
+            console.print(f"\n[bold blue]Cost Analysis Report[/bold blue]")
+            console.print(f"Cluster: {report_data.get('cluster_name', cluster_id)}")
+            console.print(f"Period: {period}")
+            console.print(f"Total Cost: ${report_data.get('total_cost', 0):.2f}")
+            console.print()
+            
+            # Cost breakdown by service
+            service_table = Table(title="Cost by Service", box=box.ROUNDED)
+            service_table.add_column("Service", style="cyan", no_wrap=True)
+            service_table.add_column("Cost", style="yellow")
+            service_table.add_column("Percentage", style="blue")
+            service_table.add_column("Trend", style="green")
+            
+            services = report_data.get('services', {})
+            total_cost = report_data.get('total_cost', 0)
+            
+            for service, data in services.items():
+                cost = data.get('cost', 0)
+                pct = (cost / total_cost * 100) if total_cost > 0 else 0
+                trend = data.get('trend', 'N/A')
+                
+                service_table.add_row(
+                    service.title(),
+                    f"${cost:.2f}",
+                    f"{pct:.1f}%",
+                    trend
+                )
+            
+            console.print(service_table)
+            console.print()
+            
+            # Cost optimization opportunities
+            opportunities = report_data.get('optimization_opportunities', [])
+            if opportunities:
+                opp_table = Table(title="Optimization Opportunities", box=box.ROUNDED)
+                opp_table.add_column("Opportunity", style="cyan", no_wrap=True)
+                opp_table.add_column("Current Cost", style="yellow")
+                opp_table.add_column("Potential Savings", style="green")
+                opp_table.add_column("Implementation", style="blue")
+                
+                total_savings = 0
+                for opp in opportunities:
+                    savings = opp.get('savings', 0)
+                    total_savings += savings
+                    
+                    opp_table.add_row(
+                        opp.get('title', 'N/A'),
+                        f"${opp.get('current_cost', 0):.2f}",
+                        f"${savings:.2f}",
+                        opp.get('implementation', 'N/A')
+                    )
+                
+                console.print(opp_table)
+                console.print(f"\n[bold]Total potential savings: ${total_savings:.2f}[/bold]")
+                console.print()
+            
+        elif format == 'json':
+            import json
+            output_data = json.dumps(report_data, indent=2)
+            if output:
+                with open(output, 'w') as f:
+                    f.write(output_data)
+                console.print(f"[green]Report saved to {output}[/green]")
+            else:
+                console.print(output_data)
+            
+        elif format == 'yaml':
+            import yaml
+            output_data = yaml.dump(report_data, default_flow_style=False)
+            if output:
+                with open(output, 'w') as f:
+                    f.write(output_data)
+                console.print(f"[green]Report saved to {output}[/green]")
+            else:
+                console.print(output_data)
         
     except Exception as e:
-        print_error(f"Trend analysis failed: {e}")
-        sys.exit(1) 
+        console.print(f"[red]✗ Failed to generate cost report: {str(e)}[/red]")
+        raise click.Abort()
+
+@report.command()
+@click.argument('cluster_id')
+@click.option('--period', '-p', default='30d', type=click.Choice(['7d', '30d', '90d']), help='Report period')
+@click.option('--format', '-f', default='table', type=click.Choice(['table', 'json', 'yaml']), help='Output format')
+@click.option('--output', '-o', help='Output file path')
+def performance(cluster_id, period, format, output):
+    """Generate detailed performance report"""
+    try:
+        config = Config()
+        auth_manager = AuthManager(config)
+        
+        if not auth_manager.is_authenticated():
+            console.print("[red]✗ Not authenticated. Please login first.[/red]")
+            raise click.Abort()
+        
+        api_client = UPIDAPIClient(config, auth_manager)
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console
+        ) as progress:
+            task = progress.add_task(f"Generating performance report for cluster {cluster_id}...", total=None)
+            report_data = api_client.generate_performance_report(cluster_id, period)
+            progress.update(task, completed=True)
+        
+        if format == 'table':
+            # Create detailed performance report
+            console.print(f"\n[bold blue]Performance Analysis Report[/bold blue]")
+            console.print(f"Cluster: {report_data.get('cluster_name', cluster_id)}")
+            console.print(f"Period: {period}")
+            console.print()
+            
+            # Performance metrics
+            metrics_table = Table(title="Performance Metrics", box=box.ROUNDED)
+            metrics_table.add_column("Metric", style="cyan", no_wrap=True)
+            metrics_table.add_column("Current", style="yellow")
+            metrics_table.add_column("Average", style="blue")
+            metrics_table.add_column("Peak", style="red")
+            metrics_table.add_column("Status", style="white")
+            
+            metrics = report_data.get('metrics', {})
+            for metric, data in metrics.items():
+                current = data.get('current', 0)
+                avg = data.get('average', 0)
+                peak = data.get('peak', 0)
+                status = data.get('status', 'N/A')
+                
+                metrics_table.add_row(
+                    metric.title(),
+                    f"{current:.1f}",
+                    f"{avg:.1f}",
+                    f"{peak:.1f}",
+                    status
+                )
+            
+            console.print(metrics_table)
+            console.print()
+            
+            # Performance issues
+            issues = report_data.get('issues', [])
+            if issues:
+                issues_table = Table(title="Performance Issues", box=box.ROUNDED)
+                issues_table.add_column("Issue", style="cyan", no_wrap=True)
+                issues_table.add_column("Severity", style="red")
+                issues_table.add_column("Impact", style="yellow")
+                issues_table.add_column("Recommendation", style="green")
+                
+                for issue in issues:
+                    issues_table.add_row(
+                        issue.get('title', 'N/A'),
+                        issue.get('severity', 'N/A'),
+                        issue.get('impact', 'N/A'),
+                        issue.get('recommendation', 'N/A')
+                    )
+                
+                console.print(issues_table)
+                console.print()
+            
+        elif format == 'json':
+            import json
+            output_data = json.dumps(report_data, indent=2)
+            if output:
+                with open(output, 'w') as f:
+                    f.write(output_data)
+                console.print(f"[green]Report saved to {output}[/green]")
+            else:
+                console.print(output_data)
+            
+        elif format == 'yaml':
+            import yaml
+            output_data = yaml.dump(report_data, default_flow_style=False)
+            if output:
+                with open(output, 'w') as f:
+                    f.write(output_data)
+                console.print(f"[green]Report saved to {output}[/green]")
+            else:
+                console.print(output_data)
+        
+    except Exception as e:
+        console.print(f"[red]✗ Failed to generate performance report: {str(e)}[/red]")
+        raise click.Abort()
+
+def generate_html_report(report_data, cluster_id, period):
+    """Generate HTML report content"""
+    html_template = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>UPID Cluster Report - {cluster_id}</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            .header {{ background-color: #f0f0f0; padding: 20px; border-radius: 5px; }}
+            .section {{ margin: 20px 0; }}
+            table {{ border-collapse: collapse; width: 100%; }}
+            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+            th {{ background-color: #f2f2f2; }}
+            .metric {{ margin: 10px 0; }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>UPID Cluster Report</h1>
+            <p><strong>Cluster:</strong> {report_data.get('cluster_name', cluster_id)}</p>
+            <p><strong>Period:</strong> {period}</p>
+            <p><strong>Generated:</strong> {report_data.get('generated_at', 'N/A')}</p>
+        </div>
+        
+        <div class="section">
+            <h2>Resource Summary</h2>
+            <table>
+                <tr><th>Resource</th><th>Used</th><th>Total</th><th>Utilization</th></tr>
+    """
+    
+    resources = report_data.get('resources', {})
+    for resource_type, data in resources.items():
+        used = data.get('used', 0)
+        total = data.get('total', 0)
+        util = (used / total * 100) if total > 0 else 0
+        html_template += f"""
+                <tr>
+                    <td>{resource_type.title()}</td>
+                    <td>{used:.1f}</td>
+                    <td>{total:.1f}</td>
+                    <td>{util:.1f}%</td>
+                </tr>
+        """
+    
+    html_template += """
+            </table>
+        </div>
+        
+        <div class="section">
+            <h2>Cost Summary</h2>
+            <table>
+                <tr><th>Category</th><th>Current</th><th>Previous</th><th>Change</th></tr>
+    """
+    
+    costs = report_data.get('costs', {})
+    for category, data in costs.items():
+        current = data.get('current', 0)
+        previous = data.get('previous', 0)
+        change = current - previous
+        change_pct = (change / previous * 100) if previous > 0 else 0
+        html_template += f"""
+                <tr>
+                    <td>{category.title()}</td>
+                    <td>${current:.2f}</td>
+                    <td>${previous:.2f}</td>
+                    <td>{change:+.2f} ({change_pct:+.1f}%)</td>
+                </tr>
+        """
+    
+    html_template += """
+            </table>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html_template

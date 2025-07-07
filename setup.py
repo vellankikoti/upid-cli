@@ -6,7 +6,7 @@ setup(
     description='UPID - Kubernetes Resource Optimization Platform with Zero-Pod Scaling',
     author='UPID Team',
     author_email='team@upid.io',
-    url='https://github.com/upid/upid-cli',
+    url='https://github.com/vellankikoti/upid-cli',
     packages=find_packages(),
     install_requires=[
         'click>=8.0.0',

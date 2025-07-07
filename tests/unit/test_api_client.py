@@ -59,8 +59,7 @@ class TestUPIDAPIClient:
         assert headers['User-Agent'] == 'UPID-CLI/1.0.0'
 
     @pytest.mark.unit
-    @patch('requests.get')
-    def test_get_request_success(self, mock_get, mock_config):
+    def test_get_request_success(self, mock_config):
         """Test successful GET request"""
         client = UPIDAPIClient(mock_config)
         
@@ -68,17 +67,16 @@ class TestUPIDAPIClient:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {'data': 'test'}
-        mock_get.return_value = mock_response
         
-        # Test GET request
-        response = client._get('/test-endpoint')
-        
-        assert response == {'data': 'test'}
-        mock_get.assert_called_once()
+        with patch.object(client.session, 'get', return_value=mock_response) as mock_get:
+            # Test GET request
+            response = client._get('/test-endpoint')
+            
+            assert response == {'data': 'test'}
+            mock_get.assert_called_once()
 
     @pytest.mark.unit
-    @patch('requests.get')
-    def test_get_request_with_params(self, mock_get, mock_config):
+    def test_get_request_with_params(self, mock_config):
         """Test GET request with parameters"""
         client = UPIDAPIClient(mock_config)
         
@@ -86,20 +84,19 @@ class TestUPIDAPIClient:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {'data': 'test'}
-        mock_get.return_value = mock_response
         
-        # Test GET request with params
-        params = {'key': 'value', 'filter': 'active'}
-        response = client._get('/test-endpoint', params=params)
-        
-        assert response == {'data': 'test'}
-        # Check that params were passed correctly
-        call_args = mock_get.call_args
-        assert call_args[1]['params'] == params
+        with patch.object(client.session, 'get', return_value=mock_response) as mock_get:
+            # Test GET request with params
+            params = {'key': 'value', 'filter': 'active'}
+            response = client._get('/test-endpoint', params=params)
+            
+            assert response == {'data': 'test'}
+            # Check that params were passed correctly
+            call_args = mock_get.call_args
+            assert call_args[1]['params'] == params
 
     @pytest.mark.unit
-    @patch('requests.get')
-    def test_get_request_http_error(self, mock_get, mock_config):
+    def test_get_request_http_error(self, mock_config):
         """Test GET request with HTTP error"""
         client = UPIDAPIClient(mock_config)
         
@@ -107,28 +104,25 @@ class TestUPIDAPIClient:
         mock_response = Mock()
         mock_response.status_code = 404
         mock_response.text = 'Not Found'
-        mock_get.return_value = mock_response
+        mock_response.raise_for_status.side_effect = HTTPError("404 Client Error: Not Found for url: https://api.upid.io/v1/test-endpoint")
         
-        # Test HTTP error
-        with pytest.raises(HTTPError, match="404 Client Error"):
-            client._get('/test-endpoint')
+        with patch.object(client.session, 'get', return_value=mock_response) as mock_get:
+            # Test HTTP error
+            with pytest.raises(HTTPError, match="404 Client Error"):
+                client._get('/test-endpoint')
 
     @pytest.mark.unit
-    @patch('requests.get')
-    def test_get_request_connection_error(self, mock_get, mock_config):
+    def test_get_request_connection_error(self, mock_config):
         """Test GET request with connection error"""
         client = UPIDAPIClient(mock_config)
         
-        # Mock connection error
-        mock_get.side_effect = RequestException("Connection failed")
-        
-        # Test connection error
-        with pytest.raises(Exception, match="Request failed: Connection failed"):
-            client._get('/test-endpoint')
+        with patch.object(client.session, 'get', side_effect=RequestException("Connection failed")) as mock_get:
+            # Test connection error
+            with pytest.raises(Exception, match="Request failed: Connection failed"):
+                client._get('/test-endpoint')
 
     @pytest.mark.unit
-    @patch('requests.post')
-    def test_post_request_success(self, mock_post, mock_config):
+    def test_post_request_success(self, mock_config):
         """Test successful POST request"""
         client = UPIDAPIClient(mock_config)
         
@@ -136,18 +130,17 @@ class TestUPIDAPIClient:
         mock_response = Mock()
         mock_response.status_code = 201
         mock_response.json.return_value = {'id': '123', 'status': 'created'}
-        mock_post.return_value = mock_response
         
-        # Test POST request
-        data = {'name': 'test', 'value': 42}
-        response = client._post('/test-endpoint', data=data)
-        
-        assert response == {'id': '123', 'status': 'created'}
-        mock_post.assert_called_once()
+        with patch.object(client.session, 'post', return_value=mock_response) as mock_post:
+            # Test POST request
+            data = {'name': 'test', 'value': 42}
+            response = client._post('/test-endpoint', data=data)
+            
+            assert response == {'id': '123', 'status': 'created'}
+            mock_post.assert_called_once()
 
     @pytest.mark.unit
-    @patch('requests.post')
-    def test_post_request_with_json(self, mock_post, mock_config):
+    def test_post_request_with_json(self, mock_config):
         """Test POST request with JSON data"""
         client = UPIDAPIClient(mock_config)
         
@@ -155,20 +148,19 @@ class TestUPIDAPIClient:
         mock_response = Mock()
         mock_response.status_code = 201
         mock_response.json.return_value = {'id': '123'}
-        mock_post.return_value = mock_response
         
-        # Test POST request with JSON
-        json_data = {'complex': {'nested': 'data'}}
-        response = client._post('/test-endpoint', json=json_data)
-        
-        assert response == {'id': '123'}
-        # Check that JSON was passed correctly
-        call_args = mock_post.call_args
-        assert call_args[1]['json'] == json_data
+        with patch.object(client.session, 'post', return_value=mock_response) as mock_post:
+            # Test POST request with JSON
+            json_data = {'complex': {'nested': 'data'}}
+            response = client._post('/test-endpoint', json=json_data)
+            
+            assert response == {'id': '123'}
+            # Check that JSON was passed correctly
+            call_args = mock_post.call_args
+            assert call_args[1]['json'] == json_data
 
     @pytest.mark.unit
-    @patch('requests.post')
-    def test_post_request_server_error(self, mock_post, mock_config):
+    def test_post_request_server_error(self, mock_config):
         """Test POST request with server error"""
         client = UPIDAPIClient(mock_config)
         
@@ -176,15 +168,15 @@ class TestUPIDAPIClient:
         mock_response = Mock()
         mock_response.status_code = 500
         mock_response.text = 'Internal Server Error'
-        mock_post.return_value = mock_response
+        mock_response.raise_for_status.side_effect = HTTPError("500 Server Error: Internal Server Error for url: https://api.upid.io/v1/test-endpoint")
         
-        # Test server error
-        with pytest.raises(HTTPError, match="500 Server Error"):
-            client._post('/test-endpoint', data={'test': 'data'})
+        with patch.object(client.session, 'post', return_value=mock_response) as mock_post:
+            # Test server error
+            with pytest.raises(HTTPError, match="500 Server Error"):
+                client._post('/test-endpoint', data={'test': 'data'})
 
     @pytest.mark.unit
-    @patch('requests.put')
-    def test_put_request_success(self, mock_put, mock_config):
+    def test_put_request_success(self, mock_config):
         """Test successful PUT request"""
         client = UPIDAPIClient(mock_config)
         
@@ -192,18 +184,17 @@ class TestUPIDAPIClient:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {'id': '123', 'status': 'updated'}
-        mock_put.return_value = mock_response
         
-        # Test PUT request
-        data = {'name': 'updated', 'value': 100}
-        response = client._put('/test-endpoint/123', data=data)
-        
-        assert response == {'id': '123', 'status': 'updated'}
-        mock_put.assert_called_once()
+        with patch.object(client.session, 'put', return_value=mock_response) as mock_put:
+            # Test PUT request
+            data = {'name': 'updated', 'value': 100}
+            response = client._put('/test-endpoint/123', data=data)
+            
+            assert response == {'id': '123', 'status': 'updated'}
+            mock_put.assert_called_once()
 
     @pytest.mark.unit
-    @patch('requests.delete')
-    def test_delete_request_success(self, mock_delete, mock_config):
+    def test_delete_request_success(self, mock_config):
         """Test successful DELETE request"""
         client = UPIDAPIClient(mock_config)
         
@@ -211,13 +202,13 @@ class TestUPIDAPIClient:
         mock_response = Mock()
         mock_response.status_code = 204
         mock_response.json.return_value = {}
-        mock_delete.return_value = mock_response
         
-        # Test DELETE request
-        response = client._delete('/test-endpoint/123')
-        
-        assert response == {}
-        mock_delete.assert_called_once()
+        with patch.object(client.session, 'delete', return_value=mock_response) as mock_delete:
+            # Test DELETE request
+            response = client._delete('/test-endpoint/123')
+            
+            assert response == {}
+            mock_delete.assert_called_once()
 
     @pytest.mark.unit
     @patch.object(UPIDAPIClient, '_post')

@@ -1,171 +1,176 @@
+#!/usr/bin/env python3
 """
 UPID CLI - Main entry point
+Kubernetes Resource Optimization Platform
 """
+
 import click
 import sys
+from rich.console import Console
+from rich.table import Table
+from rich import print as rprint
+from rich.panel import Panel
+from rich import box
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.prompt import Prompt, Confirm
 from pathlib import Path
-from upid.core.config import Config
-from upid.core.auth import AuthManager
-from upid.core.utils import print_error, print_info, print_success
-from upid.commands import auth, cluster, optimize, analyze, deploy, report, config
+from .commands import auth, cluster, analyze, optimize, deploy, report, universal
+from .core.config import Config
+from .core.auth import AuthManager
+from .core.api_client import UPIDAPIClient
+
+console = Console()
 
 @click.group()
-@click.version_option(version='1.0.0', prog_name='UPID')
-@click.option('--config', '-c', help='Path to config file')
-@click.option('--verbose', '-v', is_flag=True, help='Verbose output')
-@click.option('--output', '-o', type=click.Choice(['table', 'json', 'yaml']), 
-              default='table', help='Output format')
+@click.option('--config', '-c', help='Configuration file path')
+@click.option('--local', is_flag=True, help='Enable local mode for testing without authentication')
+@click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
 @click.pass_context
-def cli(ctx, config, verbose, output):
-    """UPID - Kubernetes Resource Optimization Platform
-    
-    Optimize your Kubernetes clusters with mathematical precision.
-    Includes zero-pod scaling detection and automated cost optimization.
-    
-    Examples:
-        upid login --email admin@company.com --password secure123
-        upid cluster register --name production-cluster --kubeconfig ~/.kube/config
-        upid optimize analyze cluster-123 --show-idle
-        upid optimize idle cluster-123
+def cli(ctx, config, local, verbose):
     """
-    ctx.ensure_object(dict)
+    UPID CLI - Kubernetes Resource Optimization Platform
     
+    Optimize your Kubernetes clusters for cost, performance, and efficiency.
+    """
     # Initialize configuration
-    try:
-        ctx.obj['config'] = Config(config_path=config)
-    except Exception as e:
-        print_error(f"Failed to load configuration: {e}")
-        sys.exit(1)
+    ctx.obj = {}
+    ctx.obj['config'] = Config(config)
     
-    # Set verbose mode
+    # Enable local mode if requested
+    if local:
+        ctx.obj['config'].enable_local_mode()
+        console.print("[yellow]🔧 Local mode enabled - running without authentication[/yellow]")
+    
+    # Set verbose logging
     if verbose:
-        ctx.obj['config'].set_verbose(True)
+        ctx.obj['config'].set('log_level', 'DEBUG')
     
-    # Set output format
-    ctx.obj['config'].set_output_format(output)
-    
-    # Initialize auth manager
-    try:
-        auth_manager = AuthManager(ctx.obj['config'])
-        ctx.obj['auth'] = auth_manager
-    except Exception as e:
-        print_error(f"Failed to initialize authentication: {e}")
-        sys.exit(1)
-    
-    # Check if user is authenticated for protected commands
-    if ctx.invoked_subcommand not in ['login', 'version', 'config']:
-        if not auth_manager.is_authenticated():
-            print_error("Not authenticated. Please run 'upid login' first.")
-            print_info("Use 'upid login --help' for authentication options.")
-            sys.exit(1)
+    # Initialize auth manager and API client
+    ctx.obj['auth_manager'] = AuthManager(ctx.obj['config'])
+    ctx.obj['api_client'] = UPIDAPIClient(ctx.obj['config'], ctx.obj['auth_manager'])
 
-# Register command groups
-cli.add_command(auth.auth_group)
-cli.add_command(cluster.cluster_group)
-cli.add_command(optimize.optimize_group)
-cli.add_command(analyze.analyze_group)
-cli.add_command(deploy.deploy_group)
-cli.add_command(report.report_group)
-cli.add_command(config.config_group)
-
-@cli.command()
-def version():
-    """Show UPID version and information"""
-    from upid import __version__, __author__, __email__
-    
-    click.echo(f"UPID CLI Version: {__version__}")
-    click.echo(f"Author: {__author__}")
-    click.echo(f"Email: {__email__}")
-    click.echo("Kubernetes Resource Optimization Platform")
-    click.echo("With Zero-Pod Scaling Detection")
+# Add command groups
+cli.add_command(auth.auth)
+cli.add_command(cluster.cluster)
+cli.add_command(analyze.analyze)
+cli.add_command(optimize.optimize)
+cli.add_command(deploy.deploy)
+cli.add_command(report.report)
+cli.add_command(universal.universal)
 
 @cli.command()
 @click.pass_context
 def status(ctx):
-    """Show UPID status and configuration"""
+    """Show current CLI status and configuration"""
     config = ctx.obj['config']
-    auth_manager = ctx.obj['auth']
+    auth_manager = ctx.obj['auth_manager']
     
-    click.echo("🔍 UPID Status")
-    click.echo("=" * 50)
+    console.print("\n[bold blue]🔍 UPID CLI Status[/bold blue]\n")
+    
+    # Configuration status
+    table = Table(title="Configuration")
+    table.add_column("Setting", style="cyan")
+    table.add_column("Value", style="green")
+    
+    table.add_row("API URL", config.get('api_url', 'Not set'))
+    table.add_row("API Version", config.get('api_version', 'v1'))
+    table.add_row("Local Mode", "✅ Enabled" if config.is_local_mode() else "❌ Disabled")
+    table.add_row("Timeout", str(config.get('timeout', 30)) + "s")
+    table.add_row("Log Level", config.get('log_level', 'INFO'))
+    
+    console.print(table)
     
     # Authentication status
-    if auth_manager.is_authenticated():
-        user_email = auth_manager.get_user_email()
-        user_org = auth_manager.get_user_organization()
-        print_success(f"Authenticated as: {user_email}")
-        if user_org:
-            print_info(f"Organization: {user_org}")
+    if config.is_local_mode():
+        console.print("\n[green]✅ Local mode active - no authentication required[/green]")
     else:
-        print_error("Not authenticated")
+        is_authenticated = auth_manager.is_authenticated()
+        if is_authenticated:
+            user = auth_manager.get_current_user()
+            console.print(f"\n[green]✅ Authenticated as: {user.get('name', 'Unknown')}[/green]")
+        else:
+            console.print("\n[yellow]⚠️  Not authenticated - run 'upid auth login'[/yellow]")
     
-    # Configuration
-    click.echo(f"\n⚙️  Configuration:")
-    click.echo(f"  API URL: {config.get_api_url()}")
-    click.echo(f"  API Version: {config.get_api_version()}")
-    click.echo(f"  Default Cluster: {config.get_default_cluster() or 'None'}")
-    click.echo(f"  Optimization Strategy: {config.get_optimization_strategy()}")
-    click.echo(f"  Safety Level: {config.get_safety_level()}")
-    click.echo(f"  Cost Model: {config.get_cost_model()}")
-    click.echo(f"  Currency: {config.get_currency()}")
-    
-    # System health
+    # Cluster status
     try:
-        api_client = auth_manager.api_client
-        health = api_client.health_check()
-        print_success("API Health: Connected")
-        if 'version' in health:
-            click.echo(f"  API Version: {health['version']}")
+        clusters = ctx.obj['api_client'].get_clusters()
+        if clusters:
+            console.print(f"\n[green]📊 Connected to {len(clusters)} cluster(s)[/green]")
+        else:
+            console.print("\n[yellow]📊 No clusters found[/yellow]")
     except Exception as e:
-        print_error(f"API Health: {e}")
+        console.print(f"\n[red]❌ Error connecting to clusters: {e}[/red]")
 
 @cli.command()
 @click.pass_context
 def init(ctx):
-    """Initialize UPID configuration"""
+    """Initialize UPID CLI configuration"""
     config = ctx.obj['config']
     
-    click.echo("🚀 Initializing UPID Configuration")
-    click.echo("=" * 40)
+    console.print("\n[bold blue]🚀 UPID CLI Initialization[/bold blue]\n")
     
-    # Prompt for configuration
-    api_url = click.prompt(
-        "Enter UPID API URL",
-        default=config.get_api_url(),
-        type=str
+    # Ask for configuration
+    api_url = Prompt.ask(
+        "Enter API URL", 
+        default=config.get('api_url', 'https://api.upid.io')
     )
+    
+    local_mode = Confirm.ask(
+        "Enable local mode for testing without authentication?",
+        default=False
+    )
+    
+    # Update configuration
     config.set('api_url', api_url)
+    if local_mode:
+        config.enable_local_mode()
+        console.print("[green]✅ Local mode enabled[/green]")
+    else:
+        config.disable_local_mode()
+        console.print("[green]✅ Production mode enabled[/green]")
     
-    optimization_strategy = click.prompt(
-        "Choose optimization strategy",
-        type=click.Choice(['balanced', 'cost-focused', 'performance-focused', 'safety-focused']),
-        default=config.get_optimization_strategy()
-    )
-    config.set('optimization_strategy', optimization_strategy)
+    console.print(f"\n[green]✅ Configuration saved to {config.config_file}[/green]")
     
-    safety_level = click.prompt(
-        "Choose safety level",
-        type=click.Choice(['strict', 'moderate', 'aggressive']),
-        default=config.get_safety_level()
-    )
-    config.set('safety_level', safety_level)
+    if not local_mode:
+        console.print("\n[yellow]Next steps:[/yellow]")
+        console.print("1. Run 'upid auth login' to authenticate")
+        console.print("2. Run 'upid cluster list' to see your clusters")
+        console.print("3. Run 'upid analyze <cluster>' to analyze resources")
+
+@cli.command()
+@click.pass_context
+def demo(ctx):
+    """Run a demo of UPID CLI features"""
+    console.print("\n[bold blue]🎬 UPID CLI Demo[/bold blue]\n")
     
-    cost_model = click.prompt(
-        "Choose cost model",
-        type=click.Choice(['aws', 'gcp', 'azure', 'generic']),
-        default=config.get_cost_model()
-    )
-    config.set('cost_model', cost_model)
+    # Check if local mode is enabled
+    if not ctx.obj['config'].is_local_mode():
+        console.print("[yellow]⚠️  Demo works best in local mode. Run with --local flag.[/yellow]\n")
     
-    currency = click.prompt(
-        "Choose currency",
-        type=click.Choice(['USD', 'EUR', 'GBP']),
-        default=config.get_currency()
-    )
-    config.set('currency', currency)
+    # Demo steps
+    steps = [
+        "1. Show CLI status",
+        "2. List clusters",
+        "3. Analyze cluster resources",
+        "4. Get optimization recommendations",
+        "5. Generate cost report"
+    ]
     
-    print_success("Configuration initialized successfully!")
-    print_info("Run 'upid login' to authenticate with UPID platform")
+    for step in steps:
+        console.print(f"[cyan]{step}[/cyan]")
+    
+    console.print("\n[green]✅ Demo completed![/green]")
+
+def main():
+    """Main entry point"""
+    try:
+        cli()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]👋 Goodbye![/yellow]")
+        sys.exit(0)
+    except Exception as e:
+        console.print(f"\n[red]❌ Error: {e}[/red]")
+        sys.exit(1)
 
 if __name__ == '__main__':
-    cli() 
+    main()

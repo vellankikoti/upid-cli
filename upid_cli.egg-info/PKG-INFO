@@ -1,0 +1,44 @@
+Metadata-Version: 2.4
+Name: upid-cli
+Version: 1.0.0
+Summary: UPID - Kubernetes Resource Optimization Platform with Zero-Pod Scaling
+Home-page: https://github.com/vellankikoti/upid-cli
+Author: UPID Team
+Author-email: team@upid.io
+Project-URL: Documentation, https://docs.upid.io
+Project-URL: Source, https://github.com/upid/upid-cli
+Project-URL: Tracker, https://github.com/upid/upid-cli/issues
+Keywords: kubernetes optimization zero-pod scaling cost-savings
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: System Administrators
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Topic :: System :: Systems Administration
+Classifier: Topic :: Utilities
+Requires-Python: >=3.8
+Requires-Dist: click>=8.0.0
+Requires-Dist: requests>=2.25.0
+Requires-Dist: numpy>=1.21.0
+Requires-Dist: scipy>=1.7.0
+Requires-Dist: pandas>=1.3.0
+Requires-Dist: pyyaml>=5.4.0
+Requires-Dist: rich>=10.0.0
+Requires-Dist: tabulate>=0.8.9
+Requires-Dist: kubernetes>=18.0.0
+Requires-Dist: python-dateutil>=2.8.0
+Requires-Dist: colorama>=0.4.4
+Requires-Dist: tqdm>=4.62.0
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: home-page
+Dynamic: keywords
+Dynamic: project-url
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary

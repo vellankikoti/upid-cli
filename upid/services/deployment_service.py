@@ -1,77 +1,43 @@
 """
-Deployment service for UPID optimizations and zero-pod scaling
+Deployment service for UPID CLI
 """
+
 import yaml
+import json
 from typing import Dict, Any, List, Optional
-from upid.core.api_client import UPIDAPIClient
+from pathlib import Path
+from ..core.config import Config
+from ..core.utils import format_cost
 
 class DeploymentService:
-    """Deployment service for UPID optimizations"""
+    """Service for deploying optimizations to Kubernetes"""
     
-    def __init__(self, auth_manager):
-        self.auth = auth_manager
-        self.api_client = auth_manager.api_client
+    def __init__(self, config: Optional[Config] = None):
+        self.config = config or Config()
     
-    def deploy_zero_pod_scaling(self, cluster_id: str, namespace: str = None) -> Dict[str, Any]:
-        """Deploy zero-pod scaling configurations"""
-        
-        # Get idle analysis
-        from upid.services.optimization_service import OptimizationService
-        optimization_service = OptimizationService(self.auth)
-        idle_analysis = optimization_service._analyze_pod_idle_time(cluster_id, {})
-        
-        # Filter pods that can scale to zero
-        scalable_pods = [
-            pod for pod in idle_analysis['idle_opportunities']
-            if pod['can_scale_to_zero'] and (not namespace or pod['namespace'] == namespace)
-        ]
-        
-        if not scalable_pods:
-            return {
-                'status': 'no_opportunities',
-                'message': 'No pods found suitable for zero-pod scaling'
-            }
-        
-        # Generate HPA configurations for zero-pod scaling
-        hpa_configs = []
-        for pod in scalable_pods:
-            hpa_config = self._generate_zero_pod_hpa_config(pod)
-            hpa_configs.append(hpa_config)
-        
-        # Deploy configurations
-        deployment_id = self._deploy_hpa_configurations(cluster_id, hpa_configs)
-        
-        return {
-            'deployment_id': deployment_id,
-            'pods_configured': len(scalable_pods),
-            'potential_savings': sum(pod['potential_savings'] for pod in scalable_pods),
-            'configurations': hpa_configs,
-            'status': 'success'
-        }
-    
-    def _generate_zero_pod_hpa_config(self, pod_analysis: Dict) -> Dict[str, Any]:
-        """Generate HPA configuration for zero-pod scaling"""
-        
-        return {
+    def create_horizontal_pod_autoscaler(self, deployment_name: str, namespace: str, 
+                                        min_replicas: int = 0, max_replicas: int = 10,
+                                        target_cpu_percentage: int = 80) -> Dict[str, Any]:
+        """Create HorizontalPodAutoscaler configuration"""
+        hpa_config = {
             'apiVersion': 'autoscaling/v2',
             'kind': 'HorizontalPodAutoscaler',
             'metadata': {
-                'name': f"{pod_analysis['pod_name']}-zero-pod-hpa",
-                'namespace': pod_analysis['namespace'],
+                'name': f"{deployment_name}-hpa",
+                'namespace': namespace,
                 'labels': {
-                    'app': pod_analysis['pod_name'],
-                    'managed-by': 'upid',
-                    'optimization-type': 'zero-pod-scaling'
+                    'app': deployment_name,
+                    'managed-by': 'upid-cli'
                 }
             },
             'spec': {
                 'scaleTargetRef': {
                     'apiVersion': 'apps/v1',
                     'kind': 'Deployment',
-                    'name': pod_analysis['pod_name']
+                    'name': deployment_name
                 },
-                'minReplicas': 0,  # Key for zero-pod scaling
-                'maxReplicas': 10,
+                'minReplicas': min_replicas,
+                'maxReplicas': max_replicas,
                 'metrics': [
                     {
                         'type': 'Resource',
@@ -79,239 +45,246 @@ class DeploymentService:
                             'name': 'cpu',
                             'target': {
                                 'type': 'Utilization',
-                                'averageUtilization': 10  # Scale up at 10% CPU
-                            }
-                        }
-                    },
-                    {
-                        'type': 'Resource',
-                        'resource': {
-                            'name': 'memory',
-                            'target': {
-                                'type': 'Utilization',
-                                'averageUtilization': 10  # Scale up at 10% memory
+                                'averageUtilization': target_cpu_percentage
                             }
                         }
                     }
-                ],
-                'behavior': {
-                    'scaleDown': {
-                        'stabilizationWindowSeconds': pod_analysis['recommended_scale_down_time'],
-                        'policies': [
-                            {
-                                'type': 'Pods',
-                                'value': 1,
-                                'periodSeconds': 60
-                            }
-                        ]
-                    },
-                    'scaleUp': {
-                        'stabilizationWindowSeconds': 0,
-                        'policies': [
-                            {
-                                'type': 'Pods',
-                                'value': 1,
-                                'periodSeconds': 30
-                            }
-                        ]
-                    }
-                }
-            }
-        }
-    
-    def _deploy_hpa_configurations(self, cluster_id: str, hpa_configs: List[Dict]) -> str:
-        """Deploy HPA configurations to cluster"""
-        
-        # Create deployment configuration
-        deployment_config = {
-            'cluster_id': cluster_id,
-            'deployment_type': 'zero_pod_scaling',
-            'configurations': hpa_configs,
-            'metadata': {
-                'description': 'Zero-pod scaling deployment',
-                'optimization_type': 'zero_pod_scaling',
-                'configurations_count': len(hpa_configs)
+                ]
             }
         }
         
-        # Deploy via API
-        deployment = self.api_client.create_deployment(
-            cluster_id=cluster_id,
-            deployment_type='zero_pod_scaling',
-            configuration=deployment_config
-        )
-        
-        return deployment['deployment_id']
+        return hpa_config
     
-    def deploy_optimizations(self, cluster_id: str, recommendations: List[Dict]) -> Dict[str, Any]:
-        """Deploy optimization recommendations"""
-        
-        # Convert recommendations to deployment configurations
-        deployment_configs = []
-        for rec in recommendations:
-            config = self._create_optimization_config(rec)
-            deployment_configs.append(config)
-        
-        # Create deployment
-        deployment_config = {
-            'cluster_id': cluster_id,
-            'deployment_type': 'optimization',
-            'configurations': deployment_configs,
-            'metadata': {
-                'description': 'Resource optimization deployment',
-                'optimization_type': 'resource_optimization',
-                'recommendations_count': len(recommendations)
-            }
-        }
-        
-        # Deploy via API
-        deployment = self.api_client.create_deployment(
-            cluster_id=cluster_id,
-            deployment_type='optimization',
-            configuration=deployment_config
-        )
-        
-        return deployment
-    
-    def _create_optimization_config(self, recommendation: Dict) -> Dict[str, Any]:
-        """Create optimization configuration from recommendation"""
+    def create_zero_pod_config(self, deployment_name: str, namespace: str,
+                              idle_threshold: str = '30m') -> Dict[str, Any]:
+        """Create zero-pod scaling configuration"""
+        # This would create a custom resource or annotation-based configuration
+        # for zero-pod scaling (like Knative or custom controllers)
         
         config = {
-            'type': recommendation['type'],
-            'title': recommendation['title'],
-            'description': recommendation['description'],
-            'savings': recommendation['savings'],
-            'risk_level': recommendation['risk_level']
+            'apiVersion': 'upid.io/v1alpha1',
+            'kind': 'ZeroPodScaler',
+            'metadata': {
+                'name': f"{deployment_name}-zero-pod",
+                'namespace': namespace,
+                'labels': {
+                    'app': deployment_name,
+                    'managed-by': 'upid-cli'
+                }
+            },
+            'spec': {
+                'deploymentRef': {
+                    'name': deployment_name,
+                    'namespace': namespace
+                },
+                'idleThreshold': idle_threshold,
+                'minReplicas': 0,
+                'maxReplicas': 10,
+                'scaleDownDelay': '5m',
+                'scaleUpDelay': '1m'
+            }
         }
-        
-        # Add type-specific configuration
-        if recommendation['type'] == 'cpu_optimization':
-            config.update({
-                'resource_type': 'cpu',
-                'action': 'reduce_allocation',
-                'target_utilization': 80
-            })
-        elif recommendation['type'] == 'memory_optimization':
-            config.update({
-                'resource_type': 'memory',
-                'action': 'reduce_allocation',
-                'target_utilization': 85
-            })
-        elif recommendation['type'] == 'cost_optimization':
-            config.update({
-                'resource_type': 'all',
-                'action': 'right_size',
-                'target_efficiency': 70
-            })
         
         return config
     
-    def get_deployment_status(self, deployment_id: str) -> Dict[str, Any]:
-        """Get deployment status"""
-        try:
-            return self.api_client.get_deployment_status(deployment_id)
-        except Exception as e:
-            raise Exception(f"Failed to get deployment status: {e}")
-    
-    def rollback_deployment(self, deployment_id: str) -> Dict[str, Any]:
-        """Rollback deployment"""
-        try:
-            return self.api_client.rollback_deployment(deployment_id)
-        except Exception as e:
-            raise Exception(f"Failed to rollback deployment: {e}")
-    
-    def list_deployments(self, cluster_id: str = None) -> List[Dict[str, Any]]:
-        """List deployments"""
-        try:
-            params = {}
-            if cluster_id:
-                params['cluster_id'] = cluster_id
-            
-            response = self.api_client.get('/api/v1/deployments', params=params)
-            return response.get('deployments', [])
-        except Exception as e:
-            raise Exception(f"Failed to list deployments: {e}")
-    
-    def get_deployment_logs(self, deployment_id: str) -> List[str]:
-        """Get deployment logs"""
-        try:
-            response = self.api_client.get(f'/api/v1/deployments/{deployment_id}/logs')
-            return response.get('logs', [])
-        except Exception as e:
-            raise Exception(f"Failed to get deployment logs: {e}")
-    
-    def validate_deployment(self, cluster_id: str, deployment_config: Dict) -> Dict[str, Any]:
-        """Validate deployment configuration"""
-        try:
-            return self.api_client.post(
-                f'/api/v1/deployments/validate',
-                data={
-                    'cluster_id': cluster_id,
-                    'configuration': deployment_config
+    def create_resource_quota(self, namespace: str, cpu_limit: str = '4', 
+                             memory_limit: str = '8Gi') -> Dict[str, Any]:
+        """Create ResourceQuota configuration"""
+        quota_config = {
+            'apiVersion': 'v1',
+            'kind': 'ResourceQuota',
+            'metadata': {
+                'name': f"{namespace}-quota",
+                'namespace': namespace,
+                'labels': {
+                    'managed-by': 'upid-cli'
                 }
-            )
-        except Exception as e:
-            raise Exception(f"Failed to validate deployment: {e}")
-    
-    def simulate_deployment(self, cluster_id: str, deployment_config: Dict) -> Dict[str, Any]:
-        """Simulate deployment without applying"""
-        try:
-            return self.api_client.post(
-                f'/api/v1/deployments/simulate',
-                data={
-                    'cluster_id': cluster_id,
-                    'configuration': deployment_config
+            },
+            'spec': {
+                'hard': {
+                    'requests.cpu': cpu_limit,
+                    'requests.memory': memory_limit,
+                    'limits.cpu': cpu_limit,
+                    'limits.memory': memory_limit
                 }
-            )
-        except Exception as e:
-            raise Exception(f"Failed to simulate deployment: {e}")
+            }
+        }
+        
+        return quota_config
     
-    def get_deployment_metrics(self, deployment_id: str) -> Dict[str, Any]:
-        """Get deployment metrics"""
-        try:
-            return self.api_client.get(f'/api/v1/deployments/{deployment_id}/metrics')
-        except Exception as e:
-            raise Exception(f"Failed to get deployment metrics: {e}")
+    def create_limit_range(self, namespace: str, default_cpu: str = '100m',
+                          default_memory: str = '128Mi') -> Dict[str, Any]:
+        """Create LimitRange configuration"""
+        limit_range_config = {
+            'apiVersion': 'v1',
+            'kind': 'LimitRange',
+            'metadata': {
+                'name': f"{namespace}-limits",
+                'namespace': namespace,
+                'labels': {
+                    'managed-by': 'upid-cli'
+                }
+            },
+            'spec': {
+                'limits': [
+                    {
+                        'type': 'Container',
+                        'default': {
+                            'cpu': default_cpu,
+                            'memory': default_memory
+                        },
+                        'defaultRequest': {
+                            'cpu': default_cpu,
+                            'memory': default_memory
+                        }
+                    }
+                ]
+            }
+        }
+        
+        return limit_range_config
     
-    def pause_deployment(self, deployment_id: str) -> Dict[str, Any]:
-        """Pause deployment"""
-        try:
-            return self.api_client.post(f'/api/v1/deployments/{deployment_id}/pause')
-        except Exception as e:
-            raise Exception(f"Failed to pause deployment: {e}")
-    
-    def resume_deployment(self, deployment_id: str) -> Dict[str, Any]:
-        """Resume deployment"""
-        try:
-            return self.api_client.post(f'/api/v1/deployments/{deployment_id}/resume')
-        except Exception as e:
-            raise Exception(f"Failed to resume deployment: {e}")
-    
-    def abort_deployment(self, deployment_id: str) -> Dict[str, Any]:
-        """Abort deployment"""
-        try:
-            return self.api_client.post(f'/api/v1/deployments/{deployment_id}/abort')
-        except Exception as e:
-            raise Exception(f"Failed to abort deployment: {e}")
-    
-    def get_deployment_history(self, cluster_id: str) -> List[Dict[str, Any]]:
-        """Get deployment history for cluster"""
-        try:
-            response = self.api_client.get(f'/api/v1/deployments/history/{cluster_id}')
-            return response.get('deployments', [])
-        except Exception as e:
-            raise Exception(f"Failed to get deployment history: {e}")
-    
-    def export_deployment_config(self, deployment_id: str, format: str = 'yaml') -> str:
-        """Export deployment configuration"""
-        try:
-            response = self.api_client.get(f'/api/v1/deployments/{deployment_id}/export')
-            config = response.get('configuration', {})
+    def generate_deployment_manifest(self, optimizations: List[Dict[str, Any]], 
+                                   cluster_name: str) -> List[Dict[str, Any]]:
+        """Generate Kubernetes manifests for optimizations"""
+        manifests = []
+        
+        for optimization in optimizations:
+            opt_type = optimization.get('type', '')
             
-            if format == 'yaml':
-                return yaml.dump(config, default_flow_style=False)
-            else:
-                import json
-                return json.dumps(config, indent=2)
-        except Exception as e:
-            raise Exception(f"Failed to export deployment config: {e}") 
+            if opt_type == 'zero_pod_scaling':
+                deployment_name = optimization.get('deployment', '')
+                namespace = optimization.get('namespace', 'default')
+                
+                # Create HPA for zero-pod scaling
+                hpa_config = self.create_horizontal_pod_autoscaler(
+                    deployment_name, namespace, min_replicas=0, max_replicas=10
+                )
+                manifests.append(hpa_config)
+                
+                # Create zero-pod configuration
+                zero_pod_config = self.create_zero_pod_config(deployment_name, namespace)
+                manifests.append(zero_pod_config)
+            
+            elif opt_type == 'resource_quota':
+                namespace = optimization.get('namespace', 'default')
+                cpu_limit = optimization.get('cpu_limit', '4')
+                memory_limit = optimization.get('memory_limit', '8Gi')
+                
+                quota_config = self.create_resource_quota(namespace, cpu_limit, memory_limit)
+                manifests.append(quota_config)
+            
+            elif opt_type == 'limit_range':
+                namespace = optimization.get('namespace', 'default')
+                default_cpu = optimization.get('default_cpu', '100m')
+                default_memory = optimization.get('default_memory', '128Mi')
+                
+                limit_range_config = self.create_limit_range(namespace, default_cpu, default_memory)
+                manifests.append(limit_range_config)
+        
+        return manifests
+    
+    def save_manifests(self, manifests: List[Dict[str, Any]], output_dir: str = './upid-manifests') -> str:
+        """Save manifests to files"""
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        saved_files = []
+        
+        for i, manifest in enumerate(manifests):
+            kind = manifest.get('kind', 'Unknown')
+            name = manifest.get('metadata', {}).get('name', f'manifest-{i}')
+            namespace = manifest.get('metadata', {}).get('namespace', 'default')
+            
+            filename = f"{namespace}-{name}-{kind.lower()}.yaml"
+            filepath = output_path / filename
+            
+            with open(filepath, 'w') as f:
+                yaml.dump(manifest, f, default_flow_style=False)
+            
+            saved_files.append(str(filepath))
+        
+        return output_dir
+    
+    def validate_manifests(self, manifests: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Validate Kubernetes manifests"""
+        validation_results = {
+            'valid': True,
+            'errors': [],
+            'warnings': []
+        }
+        
+        for manifest in manifests:
+            # Basic validation
+            if 'apiVersion' not in manifest:
+                validation_results['valid'] = False
+                validation_results['errors'].append(f"Missing apiVersion in {manifest.get('kind', 'Unknown')}")
+            
+            if 'kind' not in manifest:
+                validation_results['valid'] = False
+                validation_results['errors'].append("Missing kind in manifest")
+            
+            if 'metadata' not in manifest:
+                validation_results['valid'] = False
+                validation_results['errors'].append(f"Missing metadata in {manifest.get('kind', 'Unknown')}")
+            
+            # Check for required fields based on kind
+            kind = manifest.get('kind', '')
+            if kind == 'HorizontalPodAutoscaler':
+                if 'spec' not in manifest:
+                    validation_results['valid'] = False
+                    validation_results['errors'].append("HPA missing spec")
+                
+                spec = manifest.get('spec', {})
+                if 'scaleTargetRef' not in spec:
+                    validation_results['valid'] = False
+                    validation_results['errors'].append("HPA missing scaleTargetRef")
+            
+            elif kind == 'ResourceQuota':
+                if 'spec' not in manifest:
+                    validation_results['valid'] = False
+                    validation_results['errors'].append("ResourceQuota missing spec")
+                
+                spec = manifest.get('spec', {})
+                if 'hard' not in spec:
+                    validation_results['warnings'].append("ResourceQuota missing hard limits")
+        
+        return validation_results
+    
+    def generate_deployment_summary(self, optimizations: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Generate deployment summary"""
+        summary = {
+            'total_optimizations': len(optimizations),
+            'estimated_savings': 0,
+            'risk_level': 'low',
+            'deployments': []
+        }
+        
+        total_savings = 0
+        risk_levels = []
+        
+        for optimization in optimizations:
+            savings = optimization.get('estimated_savings', 0)
+            total_savings += savings
+            risk_level = optimization.get('risk_level', 'low')
+            risk_levels.append(risk_level)
+            
+            summary['deployments'].append({
+                'name': optimization.get('deployment', ''),
+                'namespace': optimization.get('namespace', ''),
+                'type': optimization.get('type', ''),
+                'savings': savings,
+                'risk_level': risk_level
+            })
+        
+        summary['estimated_savings'] = total_savings
+        
+        # Determine overall risk level
+        if 'high' in risk_levels:
+            summary['risk_level'] = 'high'
+        elif 'medium' in risk_levels:
+            summary['risk_level'] = 'medium'
+        else:
+            summary['risk_level'] = 'low'
+        
+        return summary

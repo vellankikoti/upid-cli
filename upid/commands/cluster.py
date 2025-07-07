@@ -1,252 +1,255 @@
 """
 Cluster management commands for UPID CLI
 """
+
 import click
-import sys
-from upid.core.utils import (
-    print_success, print_error, print_info, print_warning,
-    read_kubeconfig, validate_kubeconfig, validate_cluster_id,
-    print_table, format_percentage, format_bytes
-)
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich import box
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from ..core.config import Config
+from ..core.api_client import UPIDAPIClient
+from ..core.auth import AuthManager
+
+console = Console()
 
 @click.group()
-def cluster_group():
+def cluster():
     """Cluster management commands"""
     pass
 
-@cluster_group.command()
-@click.option('--name', '-n', required=True, help='Cluster name')
-@click.option('--kubeconfig', '-k', required=True, help='Path to kubeconfig file')
-@click.option('--region', '-r', help='Cluster region')
-@click.option('--description', '-d', help='Cluster description')
-@click.pass_context
-def register(ctx, name, kubeconfig, region, description):
-    """Register a new Kubernetes cluster"""
-    api_client = ctx.obj['auth'].api_client
-    
-    # Validate kubeconfig file
-    if not validate_kubeconfig(kubeconfig):
-        print_error("Invalid kubeconfig file")
-        sys.exit(1)
-    
+@cluster.command()
+@click.option('--format', '-f', default='table', type=click.Choice(['table', 'json', 'yaml']), help='Output format')
+@click.option('--verbose', '-v', is_flag=True, help='Verbose output')
+def list(format, verbose):
+    """List all clusters"""
     try:
-        # Read and encode kubeconfig
-        kubeconfig_data = read_kubeconfig(kubeconfig)
+        config = Config()
+        auth_manager = AuthManager(config)
         
-        # Register cluster
-        cluster = api_client.register_cluster(name, kubeconfig_data, region, description)
+        if not auth_manager.is_authenticated():
+            console.print("[red]✗ Not authenticated. Please login first.[/red]")
+            raise click.Abort()
         
-        print_success(f"Cluster '{name}' registered successfully")
-        print_info(f"Cluster ID: {cluster['cluster_id']}")
-        if region:
-            print_info(f"Region: {region}")
+        api_client = UPIDAPIClient(config, auth_manager)
         
-        # Set as default cluster if none set
-        config = ctx.obj['config']
-        if not config.get_default_cluster():
-            config.set_default_cluster(cluster['cluster_id'])
-            print_info("Set as default cluster")
-            
-    except Exception as e:
-        print_error(f"Failed to register cluster: {e}")
-        sys.exit(1)
-
-@cluster_group.command()
-@click.pass_context
-def list(ctx):
-    """List all registered clusters"""
-    api_client = ctx.obj['auth'].api_client
-    
-    try:
-        clusters = api_client.list_clusters()
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console
+        ) as progress:
+            task = progress.add_task("Fetching clusters...", total=None)
+            clusters = api_client.get_clusters()
+            progress.update(task, completed=True)
         
         if not clusters:
-            print_info("No clusters found")
+            console.print("[yellow]No clusters found[/yellow]")
             return
         
-        # Prepare table data
-        table_data = []
-        for cluster in clusters:
-            status_icon = "🟢" if cluster['status'] == 'healthy' else "🔴"
-            table_data.append({
-                'Name': cluster['name'],
-                'ID': cluster['cluster_id'],
-                'Status': f"{status_icon} {cluster['status']}",
-                'Region': cluster.get('region', 'N/A'),
-                'Nodes': cluster.get('nodes_count', 0),
-                'Pods': cluster.get('pods_count', 0)
-            })
-        
-        print_table(table_data, ['Name', 'ID', 'Status', 'Region', 'Nodes', 'Pods'], 
-                   "🏗️  Registered Clusters")
-        
-    except Exception as e:
-        print_error(f"Failed to list clusters: {e}")
-        sys.exit(1)
-
-@cluster_group.command()
-@click.argument('cluster_id')
-@click.pass_context
-def status(ctx, cluster_id):
-    """Get cluster health status"""
-    api_client = ctx.obj['auth'].api_client
-    
-    if not validate_cluster_id(cluster_id):
-        print_error("Invalid cluster ID format")
-        sys.exit(1)
-    
-    try:
-        health = api_client.get_cluster_health(cluster_id)
-        
-        click.echo(f"🏗️  Cluster Health: {cluster_id}")
-        click.echo("=" * 50)
-        
-        status_icon = "🟢" if health['status'] == 'healthy' else "🔴"
-        click.echo(f"📊 Status: {status_icon} {health['status']}")
-        click.echo(f"🖥️  Nodes: {health.get('nodes_count', 0)}")
-        click.echo(f"📦 Pods: {health.get('pods_count', 0)}")
-        click.echo(f"💾 Memory Usage: {format_percentage(health.get('memory_usage', 0))}")
-        click.echo(f"⚡ CPU Usage: {format_percentage(health.get('cpu_usage', 0))}")
-        
-        if 'storage_usage' in health:
-            click.echo(f"💿 Storage Usage: {format_percentage(health['storage_usage'])}")
-        
-        if 'network_usage' in health:
-            click.echo(f"🌐 Network Usage: {format_bytes(health['network_usage'])}/s")
-        
-        # Show warnings if any
-        warnings = health.get('warnings', [])
-        if warnings:
-            click.echo("\n⚠️  Warnings:")
-            for warning in warnings:
-                print_warning(f"  {warning}")
-        
-    except Exception as e:
-        print_error(f"Failed to get cluster status: {e}")
-        sys.exit(1)
-
-@cluster_group.command()
-@click.argument('cluster_id')
-@click.pass_context
-def delete(ctx, cluster_id):
-    """Delete cluster registration"""
-    api_client = ctx.obj['auth'].api_client
-    
-    if not validate_cluster_id(cluster_id):
-        print_error("Invalid cluster ID format")
-        sys.exit(1)
-    
-    if not click.confirm(f"Are you sure you want to delete cluster {cluster_id}?"):
-        print_info("Operation cancelled")
-        return
-    
-    try:
-        api_client.delete_cluster(cluster_id)
-        print_success(f"Cluster {cluster_id} deleted successfully")
-        
-        # Remove from default if it was the default cluster
-        config = ctx.obj['config']
-        if config.get_default_cluster() == cluster_id:
-            config.set_default_cluster(None)
-            print_info("Removed from default cluster")
+        if format == 'table':
+            # Create table
+            table = Table(title="Clusters", box=box.ROUNDED)
+            table.add_column("ID", style="cyan", no_wrap=True)
+            table.add_column("Name", style="white")
+            table.add_column("Region", style="blue")
+            table.add_column("Status", style="green")
+            table.add_column("Nodes", style="yellow")
+            table.add_column("Pods", style="yellow")
+            table.add_column("Created", style="dim")
             
+            for cluster in clusters:
+                status_color = "green" if cluster.get('status') == 'healthy' else "red"
+                table.add_row(
+                    cluster.get('cluster_id', 'N/A'),
+                    cluster.get('name', 'N/A'),
+                    cluster.get('region', 'N/A'),
+                    f"[{status_color}]{cluster.get('status', 'N/A')}[/{status_color}]",
+                    str(cluster.get('nodes_count', 0)),
+                    str(cluster.get('pods_count', 0)),
+                    cluster.get('created_at', 'N/A')
+                )
+            
+            console.print(table)
+            
+        elif format == 'json':
+            import json
+            console.print(json.dumps(clusters, indent=2))
+            
+        elif format == 'yaml':
+            import yaml
+            console.print(yaml.dump(clusters, default_flow_style=False))
+        
     except Exception as e:
-        print_error(f"Failed to delete cluster: {e}")
-        sys.exit(1)
+        console.print(f"[red]✗ Failed to list clusters: {str(e)}[/red]")
+        raise click.Abort()
 
-@cluster_group.command()
+@cluster.command()
 @click.argument('cluster_id')
-@click.option('--watch', '-w', is_flag=True, help='Watch cluster status continuously')
-@click.pass_context
-def health(ctx, cluster_id, watch):
-    """Monitor cluster health"""
-    api_client = ctx.obj['auth'].api_client
-    
-    if not validate_cluster_id(cluster_id):
-        print_error("Invalid cluster ID format")
-        sys.exit(1)
-    
+@click.option('--format', '-f', default='table', type=click.Choice(['table', 'json', 'yaml']), help='Output format')
+def get(cluster_id, format):
+    """Get detailed information about a cluster"""
     try:
-        if watch:
-            import time
-            click.echo(f"🔍 Watching cluster health: {cluster_id}")
-            click.echo("Press Ctrl+C to stop")
+        config = Config()
+        auth_manager = AuthManager(config)
+        
+        if not auth_manager.is_authenticated():
+            console.print("[red]✗ Not authenticated. Please login first.[/red]")
+            raise click.Abort()
+        
+        api_client = UPIDAPIClient(config, auth_manager)
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console
+        ) as progress:
+            task = progress.add_task(f"Fetching cluster {cluster_id}...", total=None)
+            cluster = api_client.get_cluster(cluster_id)
+            progress.update(task, completed=True)
+        
+        if format == 'table':
+            # Create detailed table
+            table = Table(title=f"Cluster: {cluster.get('name', cluster_id)}", box=box.ROUNDED)
+            table.add_column("Property", style="cyan", no_wrap=True)
+            table.add_column("Value", style="white")
             
-            while True:
-                health = api_client.get_cluster_health(cluster_id)
-                
-                # Clear screen and show status
-                click.clear()
-                click.echo(f"🏗️  Cluster Health: {cluster_id}")
-                click.echo("=" * 50)
-                click.echo(f"📊 Status: {'🟢' if health['status'] == 'healthy' else '🔴'} {health['status']}")
-                click.echo(f"🖥️  Nodes: {health.get('nodes_count', 0)}")
-                click.echo(f"📦 Pods: {health.get('pods_count', 0)}")
-                click.echo(f"💾 Memory: {format_percentage(health.get('memory_usage', 0))}")
-                click.echo(f"⚡ CPU: {format_percentage(health.get('cpu_usage', 0))}")
-                click.echo(f"⏰ Last Updated: {health.get('last_updated', 'N/A')}")
-                
-                time.sleep(30)  # Update every 30 seconds
-        else:
-            health = api_client.get_cluster_health(cluster_id)
+            table.add_row("ID", cluster.get('cluster_id', 'N/A'))
+            table.add_row("Name", cluster.get('name', 'N/A'))
+            table.add_row("Region", cluster.get('region', 'N/A'))
+            table.add_row("Status", cluster.get('status', 'N/A'))
+            table.add_row("Nodes Count", str(cluster.get('nodes_count', 0)))
+            table.add_row("Pods Count", str(cluster.get('pods_count', 0)))
+            table.add_row("Created", cluster.get('created_at', 'N/A'))
+            table.add_row("Updated", cluster.get('updated_at', 'N/A'))
             
-            click.echo(f"🏗️  Cluster Health: {cluster_id}")
-            click.echo("=" * 50)
-            click.echo(f"📊 Status: {'🟢' if health['status'] == 'healthy' else '🔴'} {health['status']}")
-            click.echo(f"🖥️  Nodes: {health.get('nodes_count', 0)}")
-            click.echo(f"📦 Pods: {health.get('pods_count', 0)}")
-            click.echo(f"💾 Memory: {format_percentage(health.get('memory_usage', 0))}")
-            click.echo(f"⚡ CPU: {format_percentage(health.get('cpu_usage', 0))}")
+            # Add additional info if available
+            if 'version' in cluster:
+                table.add_row("Kubernetes Version", cluster['version'])
+            if 'platform' in cluster:
+                table.add_row("Platform", cluster['platform'])
+            if 'cost' in cluster:
+                table.add_row("Monthly Cost", f"${cluster['cost']:.2f}")
             
-    except KeyboardInterrupt:
-        if watch:
-            print_info("\nStopped watching cluster health")
+            console.print(table)
+            
+        elif format == 'json':
+            import json
+            console.print(json.dumps(cluster, indent=2))
+            
+        elif format == 'yaml':
+            import yaml
+            console.print(yaml.dump(cluster, default_flow_style=False))
+        
     except Exception as e:
-        print_error(f"Failed to get cluster health: {e}")
-        sys.exit(1)
+        console.print(f"[red]✗ Failed to get cluster {cluster_id}: {str(e)}[/red]")
+        raise click.Abort()
 
-@cluster_group.command()
-@click.argument('cluster_id')
-@click.pass_context
-def info(ctx, cluster_id):
-    """Get detailed cluster information"""
-    api_client = ctx.obj['auth'].api_client
-    
-    if not validate_cluster_id(cluster_id):
-        print_error("Invalid cluster ID format")
-        sys.exit(1)
-    
+@cluster.command()
+@click.option('--name', '-n', required=True, help='Cluster name')
+@click.option('--region', '-r', required=True, help='Cluster region')
+@click.option('--platform', '-p', default='aws', type=click.Choice(['aws', 'gcp', 'azure']), help='Cloud platform')
+@click.option('--nodes', default=3, help='Number of nodes')
+@click.option('--node-type', default='t3.medium', help='Node instance type')
+@click.option('--wait', '-w', is_flag=True, help='Wait for cluster creation to complete')
+def create(name, region, platform, nodes, node_type, wait):
+    """Create a new cluster"""
     try:
-        cluster = api_client.get_cluster(cluster_id)
+        config = Config()
+        auth_manager = AuthManager(config)
         
-        click.echo(f"🏗️  Cluster Information: {cluster_id}")
-        click.echo("=" * 50)
-        click.echo(f"Name: {cluster['name']}")
-        click.echo(f"Region: {cluster.get('region', 'N/A')}")
-        click.echo(f"Description: {cluster.get('description', 'N/A')}")
-        click.echo(f"Status: {cluster['status']}")
-        click.echo(f"Created: {cluster.get('created_at', 'N/A')}")
-        click.echo(f"Updated: {cluster.get('updated_at', 'N/A')}")
+        if not auth_manager.is_authenticated():
+            console.print("[red]✗ Not authenticated. Please login first.[/red]")
+            raise click.Abort()
         
-        # Resource information
-        if 'resources' in cluster:
-            resources = cluster['resources']
-            click.echo(f"\n📊 Resource Information:")
-            click.echo(f"  Total CPU: {resources.get('total_cpu', 0)} cores")
-            click.echo(f"  Total Memory: {format_bytes(resources.get('total_memory', 0))}")
-            click.echo(f"  Total Storage: {format_bytes(resources.get('total_storage', 0))}")
-            click.echo(f"  Available CPU: {resources.get('available_cpu', 0)} cores")
-            click.echo(f"  Available Memory: {format_bytes(resources.get('available_memory', 0))}")
+        api_client = UPIDAPIClient(config, auth_manager)
         
-        # Workload information
-        if 'workloads' in cluster:
-            workloads = cluster['workloads']
-            click.echo(f"\n📦 Workload Information:")
-            click.echo(f"  Deployments: {workloads.get('deployments', 0)}")
-            click.echo(f"  Services: {workloads.get('services', 0)}")
-            click.echo(f"  ConfigMaps: {workloads.get('configmaps', 0)}")
-            click.echo(f"  Secrets: {workloads.get('secrets', 0)}")
+        # Prepare cluster data
+        cluster_data = {
+            'name': name,
+            'region': region,
+            'platform': platform,
+            'nodes_count': nodes,
+            'node_type': node_type,
+            'version': '1.24'  # Default Kubernetes version
+        }
+        
+        console.print(f"[yellow]Creating cluster '{name}' in {region}...[/yellow]")
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console
+        ) as progress:
+            task = progress.add_task("Creating cluster...", total=None)
+            cluster = api_client.create_cluster(cluster_data)
+            progress.update(task, completed=True)
+        
+        console.print(Panel(
+            f"[green]✓ Cluster created successfully![/green]\n\n"
+            f"Cluster ID: [bold]{cluster.get('cluster_id', 'N/A')}[/bold]\n"
+            f"Name: {cluster.get('name', name)}\n"
+            f"Region: {cluster.get('region', region)}\n"
+            f"Status: {cluster.get('status', 'creating')}",
+            title="[bold green]Cluster Created[/bold green]",
+            border_style="green"
+        ))
+        
+        if wait:
+            console.print("[yellow]Waiting for cluster to be ready...[/yellow]")
+            # TODO: Implement wait logic with status polling
         
     except Exception as e:
-        print_error(f"Failed to get cluster information: {e}")
-        sys.exit(1) 
+        console.print(f"[red]✗ Failed to create cluster: {str(e)}[/red]")
+        raise click.Abort()
+
+@cluster.command()
+@click.argument('cluster_id')
+@click.option('--force', '-f', is_flag=True, help='Force deletion without confirmation')
+def delete(cluster_id, force):
+    """Delete a cluster"""
+    try:
+        config = Config()
+        auth_manager = AuthManager(config)
+        
+        if not auth_manager.is_authenticated():
+            console.print("[red]✗ Not authenticated. Please login first.[/red]")
+            raise click.Abort()
+        
+        api_client = UPIDAPIClient(config, auth_manager)
+        
+        # Get cluster info for confirmation
+        try:
+            cluster = api_client.get_cluster(cluster_id)
+            cluster_name = cluster.get('name', cluster_id)
+        except:
+            cluster_name = cluster_id
+        
+        # Confirm deletion
+        if not force:
+            if not click.confirm(f"Are you sure you want to delete cluster '{cluster_name}' ({cluster_id})?"):
+                console.print("[yellow]Deletion cancelled[/yellow]")
+                return
+        
+        console.print(f"[yellow]Deleting cluster '{cluster_name}'...[/yellow]")
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console
+        ) as progress:
+            task = progress.add_task("Deleting cluster...", total=None)
+            api_client.delete_cluster(cluster_id)
+            progress.update(task, completed=True)
+        
+        console.print(Panel(
+            f"[green]✓ Cluster deleted successfully![/green]\n\n"
+            f"Cluster ID: [bold]{cluster_id}[/bold]\n"
+            f"Name: {cluster_name}",
+            title="[bold green]Cluster Deleted[/bold green]",
+            border_style="green"
+        ))
+        
+    except Exception as e:
+        console.print(f"[red]✗ Failed to delete cluster {cluster_id}: {str(e)}[/red]")
+        raise click.Abort()
