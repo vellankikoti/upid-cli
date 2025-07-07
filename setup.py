@@ -1,0 +1,50 @@
+from setuptools import setup, find_packages
+
+setup(
+    name='upid-cli',
+    version='1.0.0',
+    description='UPID - Kubernetes Resource Optimization Platform with Zero-Pod Scaling',
+    author='UPID Team',
+    author_email='team@upid.io',
+    url='https://github.com/upid/upid-cli',
+    packages=find_packages(),
+    install_requires=[
+        'click>=8.0.0',
+        'requests>=2.25.0',
+        'numpy>=1.21.0',
+        'scipy>=1.7.0',
+        'pandas>=1.3.0',
+        'pyyaml>=5.4.0',
+        'rich>=10.0.0',
+        'tabulate>=0.8.9',
+        'kubernetes>=18.0.0',
+        'python-dateutil>=2.8.0',
+        'colorama>=0.4.4',
+        'tqdm>=4.62.0',
+    ],
+    entry_points={
+        'console_scripts': [
+            'upid=upid.cli:cli',
+        ],
+    },
+    python_requires='>=3.8',
+    classifiers=[
+        'Development Status :: 4 - Beta',
+        'Intended Audience :: Developers',
+        'Intended Audience :: System Administrators',
+        'License :: OSI Approved :: MIT License',
+        'Programming Language :: Python :: 3',
+        'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: 3.9',
+        'Programming Language :: Python :: 3.10',
+        'Programming Language :: Python :: 3.11',
+        'Topic :: System :: Systems Administration',
+        'Topic :: Utilities',
+    ],
+    keywords='kubernetes optimization zero-pod scaling cost-savings',
+    project_urls={
+        'Documentation': 'https://docs.upid.io',
+        'Source': 'https://github.com/upid/upid-cli',
+        'Tracker': 'https://github.com/upid/upid-cli/issues',
+    },
+) 

@@ -1,0 +1,271 @@
+name: UPID CLI Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  # Build and Test
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
+    
+    - name: Run tests
+      run: |
+        python tests/run_tests.py --all
+
+  # Build Binaries
+  build-linux:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
+        pip install pyinstaller
+    
+    - name: Build Linux binary
+      run: |
+        python build_binary.py
+    
+    - name: Upload Linux binary
+      uses: actions/upload-artifact@v3
+      with:
+        name: upid-linux
+        path: binaries/linux/upid
+
+  build-macos:
+    runs-on: macos-latest
+    needs: test
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
+        pip install pyinstaller
+    
+    - name: Build macOS binary
+      run: |
+        python build_binary.py
+    
+    - name: Upload macOS binary
+      uses: actions/upload-artifact@v3
+      with:
+        name: upid-macos
+        path: binaries/macos/upid
+
+  build-windows:
+    runs-on: windows-latest
+    needs: test
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
+        pip install pyinstaller
+    
+    - name: Build Windows binary
+      run: |
+        python build_binary.py
+    
+    - name: Upload Windows binary
+      uses: actions/upload-artifact@v3
+      with:
+        name: upid-windows
+        path: binaries/windows/upid.exe
+
+  # Create Release
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-linux, build-macos, build-windows]
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download all binaries
+      uses: actions/download-artifact@v3
+      with:
+        path: artifacts
+    
+    - name: Create release packages
+      run: |
+        mkdir -p release
+        
+        # Linux package
+        mkdir -p release/upid-linux
+        cp artifacts/upid-linux/upid release/upid-linux/
+        cp README.md LICENSE CHANGELOG.md release/upid-linux/ 2>/dev/null || true
+        cp install.sh release/upid-linux/
+        cd release && tar -czf upid-linux.tar.gz upid-linux/
+        
+        # macOS package
+        mkdir -p release/upid-macos
+        cp artifacts/upid-macos/upid release/upid-macos/
+        cp README.md LICENSE CHANGELOG.md release/upid-macos/ 2>/dev/null || true
+        cp install.sh release/upid-macos/
+        cd release && tar -czf upid-macos.tar.gz upid-macos/
+        
+        # Windows package
+        mkdir -p release/upid-windows
+        cp artifacts/upid-windows/upid.exe release/upid-windows/
+        cp README.md LICENSE CHANGELOG.md release/upid-windows/ 2>/dev/null || true
+        cp install.bat release/upid-windows/
+        cd release && zip -r upid-windows.zip upid-windows/
+    
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          release/upid-linux.tar.gz
+          release/upid-macos.tar.gz
+          release/upid-windows.zip
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Docker Release
+  docker:
+    runs-on: ubuntu-latest
+    needs: [build-linux]
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download Linux binary
+      uses: actions/download-artifact@v3
+      with:
+        name: upid-linux
+        path: binaries/linux
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+    
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+    
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        file: Dockerfile.binary
+        push: true
+        tags: |
+          your-org/upid-cli:latest
+          your-org/upid-cli:${{ github.ref_name }}
+
+  # Homebrew Release (macOS)
+  homebrew:
+    runs-on: ubuntu-latest
+    needs: [release]
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Update Homebrew formula
+      run: |
+        # This would update a Homebrew formula repository
+        # Requires a separate repository for the Homebrew formula
+        echo "Homebrew release would be updated here"
+        echo "Version: ${{ github.ref_name }}"
+
+  # Chocolatey Release (Windows)
+  chocolatey:
+    runs-on: ubuntu-latest
+    needs: [release]
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Update Chocolatey package
+      run: |
+        # This would update a Chocolatey package
+        echo "Chocolatey release would be updated here"
+        echo "Version: ${{ github.ref_name }}"
+
+  # Scoop Release (Windows)
+  scoop:
+    runs-on: ubuntu-latest
+    needs: [release]
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Update Scoop manifest
+      run: |
+        # This would update a Scoop manifest
+        echo "Scoop release would be updated here"
+        echo "Version: ${{ github.ref_name }}"
+
+  # Notify Release
+  notify:
+    runs-on: ubuntu-latest
+    needs: [release, docker]
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+    - name: Notify Slack
+      uses: 8398a7/action-slack@v3
+      with:
+        status: success
+        channel: '#releases'
+        text: 'UPID CLI v${{ github.ref_name }} has been released! 🚀'
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    
+    - name: Create release summary
+      run: |
+        echo "## UPID CLI v${{ github.ref_name }} Released! 🎉" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### What's New:" >> $GITHUB_STEP_SUMMARY
+        echo "- Kubernetes resource optimization" >> $GITHUB_STEP_SUMMARY
+        echo "- Zero-pod scaling capabilities" >> $GITHUB_STEP_SUMMARY
+        echo "- Cost analysis and recommendations" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Downloads:" >> $GITHUB_STEP_SUMMARY
+        echo "- [Linux](https://github.com/your-org/upid-cli/releases/download/${{ github.ref_name }}/upid-linux.tar.gz)" >> $GITHUB_STEP_SUMMARY
+        echo "- [macOS](https://github.com/your-org/upid-cli/releases/download/${{ github.ref_name }}/upid-macos.tar.gz)" >> $GITHUB_STEP_SUMMARY
+        echo "- [Windows](https://github.com/your-org/upid-cli/releases/download/${{ github.ref_name }}/upid-windows.zip)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Docker:" >> $GITHUB_STEP_SUMMARY
+        echo "```bash" >> $GITHUB_STEP_SUMMARY
+        echo "docker pull your-org/upid-cli:${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "```" >> $GITHUB_STEP_SUMMARY 
